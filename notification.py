@@ -10,7 +10,15 @@ class Notification:
             return
 
         result = body.get("result", {})
+        result_msg = result.get("resultMsg", body.get("resultMsg", "Unknown Error"))
         if result.get("resultMsg", "FAILURE").upper() != "SUCCESS":
+            if self._is_balance_shortage(body):
+                self.send_purchase_balance_shortage_message(
+                    "로또 6/45",
+                    body.get("balance", "확인불가"),
+                    result_msg,
+                    destination,
+                )
             return
 
         lotto_number_str = self.make_lotto_number_message(result["arrGameChoiceNum"])
@@ -41,6 +49,13 @@ class Notification:
             return
 
         if body.get("resultCode") != "100":
+            if self._is_balance_shortage(body):
+                self.send_purchase_balance_shortage_message(
+                    "연금복권 720+",
+                    body.get("balance", "확인불가"),
+                    body.get("resultMsg", "Unknown Error"),
+                    destination,
+                )
             return
 
         win720_round = body.get("round", "?")
@@ -166,6 +181,19 @@ class Notification:
             )
             self._send_message(destination, message)
 
+    def send_purchase_balance_shortage_message(
+        self, lottery_name: str, balance: str, reason: str, destination: dict
+    ) -> None:
+        message = (
+            "⚠️ <b>복권 구매 실패 - 잔액 부족</b>\n"
+            f"• 대상: <b>{self._escape(lottery_name)}</b>\n"
+            f"• 현재 잔액: <b>{self._escape(balance)}</b>\n"
+            f"• 실패 사유: <b>{self._escape(reason)}</b>\n"
+            "\n잔액 부족으로 인한 구매 실패는 알림 대상입니다. "
+            "다음 자동 구매를 위해 예치금 충전을 확인해 주세요."
+        )
+        self._send_message(destination, message)
+
     def send_balance_low_message(self, balance: str, destination: dict) -> None:
         message = (
             "⚠️ <b>복권 예치금 충전 안내</b>\n"
@@ -176,6 +204,25 @@ class Notification:
             "\n잔액이 10,000원 이하입니다. 다음 자동 구매를 위해 충전을 권장합니다."
         )
         self._send_message(destination, message)
+
+    def _is_balance_shortage(self, body: dict) -> bool:
+        text = self._flatten_message(body).lower()
+        balance_shortage_patterns = [
+            ("잔액", "부족"),
+            ("예치금", "부족"),
+            ("deposit", "insufficient"),
+            ("balance", "insufficient"),
+            ("insufficient", "fund"),
+            ("not enough", "balance"),
+        ]
+        return any(all(keyword in text for keyword in pattern) for pattern in balance_shortage_patterns)
+
+    def _flatten_message(self, value) -> str:
+        if isinstance(value, dict):
+            return " ".join(self._flatten_message(v) for v in value.values())
+        if isinstance(value, (list, tuple, set)):
+            return " ".join(self._flatten_message(v) for v in value)
+        return str(value)
 
     def _send_message(self, destination: dict, message: str) -> None:
         if not destination:
