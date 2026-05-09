@@ -1,22 +1,28 @@
 name: Buy lotto
 on:
   schedule:
-    - cron: 0 10 * * 1 # every Monday on 07:00 PM (KST)
+    - cron: 30 2 * * * # every day on 11:30 AM (KST)
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: [ubuntu-latest]
     name: Buy lotto
-    steps:  
+    steps:
 
-      - uses: actions/checkout@v3    
+      - uses: actions/checkout@v3
       - uses: actions/setup-python@v4
         with:
           python-version: '3.9'
           cache: 'pip' # caching pip dependencies
       - run: pip install -r requirements.txt
-      
+
+      - name: Random delay before purchase
+        run: |
+          DELAY_SECONDS=$(( RANDOM % 1801 ))
+          echo "구매 전 ${DELAY_SECONDS}초 동안 랜덤 대기합니다."
+          sleep "${DELAY_SECONDS}"
+
       - name: Run Scripts
         run: make buy # or use 'make buy_lotto' / 'make buy_win720' for granular purchase
         env:
@@ -24,4 +30,6 @@ jobs:
           PASSWORD: ${{ secrets.PASSWORD }}
           COUNT: ${{ secrets.COUNT }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          DISCORD_WEBHOOK_URL:  ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
