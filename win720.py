@@ -1,6 +1,7 @@
 import json
 import datetime
 import base64
+import os
 import requests
 
 from enum import Enum
@@ -21,6 +22,11 @@ import logging
 import time
 
 logger = logging.getLogger(__name__)
+
+WIN720_LIMIT_ENV = "WIN720_LIMIT"
+DEFAULT_WIN720_LIMIT = 5
+WIN720_BUY_COUNT = 5
+
 
 class Win720:
 
@@ -65,6 +71,18 @@ class Win720:
         
         self.keyCode = jsessionid
         win720_round = self._get_round()
+
+        win720_limit = self._get_purchase_limit()
+        current_purchase = self._get_current_round_purchase(auth_ctrl, win720_round)
+        remaining_count = win720_limit - current_purchase["count"]
+        if remaining_count < WIN720_BUY_COUNT:
+            print(
+                f"[Info] 연금복권 720+ {win720_round}회차는 이미 "
+                f"{current_purchase['count']}게임을 구매했습니다. "
+                f"회차별 제한은 {win720_limit}게임이고 1회 구매 수량은 {WIN720_BUY_COUNT}게임이므로 "
+                "추가 구매를 건너뜁니다."
+            )
+            return None
         
         makeAutoNum_ret = self._makeAutoNumbers(auth_ctrl, win720_round)
         
@@ -98,6 +116,110 @@ class Win720:
         assert isinstance(auth_ctrl, auth.AuthController)
         return auth_ctrl.add_auth_cred_to_headers(self._REQ_HEADERS)
     
+    def _get_purchase_limit(self) -> int:
+        raw_limit = os.environ.get(WIN720_LIMIT_ENV)
+        if not raw_limit:
+            return DEFAULT_WIN720_LIMIT
+
+        try:
+            limit = int(raw_limit)
+        except ValueError as e:
+            raise ValueError(f"{WIN720_LIMIT_ENV}는 숫자로 설정해야 합니다: {raw_limit}") from e
+
+        if limit < 1:
+            raise ValueError(f"{WIN720_LIMIT_ENV}는 1 이상의 숫자로 설정해야 합니다: {raw_limit}")
+
+        return limit
+
+    def _get_current_round_purchase(self, auth_ctrl: auth.AuthController, win720_round: str) -> dict:
+        headers = self._generate_ledger_headers(auth_ctrl)
+        parameters = common.get_search_date_range()
+        params = {
+            "srchStrDt": parameters["searchStartDate"],
+            "srchEndDt": parameters["searchEndDate"],
+            "ltGdsCd": "LP72",
+            "pageNum": 1,
+            "recordCountPerPage": 20,
+        }
+
+        try:
+            res = self.http_client.get(
+                "https://www.dhlottery.co.kr/mypage/selectMyLotteryledger.do",
+                params=params,
+                headers=headers,
+            )
+            data = res.json().get("data", {}) or {}
+        except (requests.RequestException, ValueError, AttributeError) as e:
+            logger.warning(
+                "[Warning] 연금복권 구매 이력 확인 실패. "
+                "중복 구매 방지를 위해 구매를 중단합니다: %s",
+                e,
+            )
+            raise RuntimeError(
+                "연금복권 구매 이력을 확인하지 못해 중복 구매 위험이 있으므로 구매를 중단합니다."
+            ) from e
+
+        purchase = {
+            "count": 0,
+            "orders": [],
+        }
+        for item in data.get("list", []):
+            item_round = self._normalize_round(item.get("ltEpsd") or item.get("ltEpsdView"))
+            if item_round != str(win720_round):
+                continue
+
+            order = {
+                "round": item_round,
+                "purchased_date": item.get("eltOrdrDt", "-"),
+                "order_no": item.get("ntslOrdrNo", "-"),
+            }
+            order["count"] = self._get_purchase_count_from_detail(auth_ctrl, order["order_no"])
+            purchase["count"] += order["count"]
+            purchase["orders"].append(order)
+
+        return purchase
+
+    def _get_purchase_count_from_detail(self, auth_ctrl: auth.AuthController, order_no: str) -> int:
+        if not order_no or order_no == "-":
+            return WIN720_BUY_COUNT
+
+        try:
+            res = self.http_client.get(
+                "https://www.dhlottery.co.kr/mypage/lottery720select.do",
+                params={"ntslOrdrNo": order_no},
+                headers=self._generate_ledger_headers(auth_ctrl),
+            )
+            detail_data = res.json().get("data", {}) or {}
+            game_list = detail_data.get("list")
+            if game_list:
+                return len(game_list)
+        except (requests.RequestException, ValueError, AttributeError) as e:
+            logger.warning(
+                "[Warning] 연금복권 상세 구매 이력 확인 실패(order_no=%s). 기본 구매 수량(%s게임)으로 계산합니다: %s",
+                order_no,
+                WIN720_BUY_COUNT,
+                e,
+            )
+
+        return WIN720_BUY_COUNT
+
+    def _generate_ledger_headers(self, auth_ctrl: auth.AuthController) -> dict:
+        headers = self._generate_req_headers(auth_ctrl)
+        headers.update({
+            "Referer": "https://www.dhlottery.co.kr/mypage/mylotteryledger",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "X-Requested-With": "XMLHttpRequest",
+        })
+        headers.pop("Content-Type", None)
+        headers.pop("Origin", None)
+        return headers
+
+    def _normalize_round(self, value) -> str:
+        matched = re.search(r"\d+", str(value or ""))
+        if not matched:
+            return ""
+        return str(int(matched.group()))
+
 
     def _get_round(self) -> str:
         try:

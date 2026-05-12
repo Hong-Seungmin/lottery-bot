@@ -60,7 +60,8 @@ def check_winning_lotto645(authCtrl: auth.AuthController) -> dict:
 def buy_win720(authCtrl: auth.AuthController, username: str):
     pension = win720.Win720()
     response = pension.buy_Win720(authCtrl, username)
-    response["balance"] = authCtrl.get_user_balance()
+    if response is not None:
+        response["balance"] = authCtrl.get_user_balance()
     return response
 
 
@@ -113,7 +114,7 @@ def _run_buy_step(description: str, callback):
     try:
         return callback()
     except Exception as e:
-        print(f"[Warning] {description} 실패. 일일 반복 구매 정책에 따라 알림 없이 무시합니다: {e}")
+        print(f"[Warning] {description} 실패. 반복 구매 정책에 따라 알림 없이 무시합니다: {e}")
         return None
 
 
