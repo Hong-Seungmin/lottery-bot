@@ -1,0 +1,26 @@
+name: Keep GitHub Actions Alive
+
+on:
+  schedule:
+    # 매달 1일 새벽 0시에 실행 (60일이 되기 전에 작동)
+    - cron: '0 0 1 * *'
+  workflow_dispatch: # 수동으로도 실행 가능하게 설정
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 커밋을 푸시하기 위해 권한 필요
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Auto Commit to Prevent Disabling
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@://github.com"
+          
+          # 비어있는 커밋 생성
+          git commit --allow-empty -m "chore: keep github actions alive [skip ci]"
+          git push
