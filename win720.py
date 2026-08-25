@@ -1,3 +1,4 @@
+import copy
 import json
 import datetime
 import base64
@@ -5,7 +6,6 @@ import os
 import requests
 
 from enum import Enum
-from bs4 import BeautifulSoup as BS
 from datetime import timedelta
 from Crypto.Cipher import AES
 from Crypto.Protocol.KDF import PBKDF2
@@ -26,6 +26,15 @@ logger = logging.getLogger(__name__)
 WIN720_LIMIT_ENV = "WIN720_LIMIT"
 DEFAULT_WIN720_LIMIT = 5
 WIN720_BUY_COUNT = 5
+
+# 데스크톱 구매 진입점은 gmUtil.goGameClsf('LP72','PRCHS') ->
+# {serviceElwasUrl}/game/TotalGame.jsp?LottoId=LP72 팝업이다.
+# 이 진입을 거쳐야 el 서버가 암호화 키로 쓰이는 JSESSIONID를 발급한다.
+EL_HOST = "el.dhlottery.co.kr"
+EL_BASE_URL = f"https://{EL_HOST}"
+WIN720_LOTTO_ID = "LP72"
+EL_TOTAL_GAME_URL = f"{EL_BASE_URL}/game/TotalGame.jsp"
+EL_GAME_URL = f"{EL_BASE_URL}/game/pension720/game.jsp"
 
 
 class Win720:
@@ -67,9 +76,6 @@ class Win720:
     ) -> dict:
         assert isinstance(auth_ctrl, auth.AuthController)
 
-        jsessionid = auth_ctrl.get_current_session_id()
-        
-        self.keyCode = jsessionid
         win720_round = self._get_round()
 
         win720_limit = self._get_purchase_limit()
@@ -83,7 +89,14 @@ class Win720:
                 "추가 구매를 건너뜁니다."
             )
             return None
-        
+
+        # 게임 창에 진입한 뒤, el 서버가 발급한 세션 ID를 암호화 키로 사용한다.
+        # (호스트를 지정하지 않으면 ol 서버의 JSESSIONID를 집어와 복호화가 깨진다.)
+        self.enter_game(auth_ctrl)
+        self.keyCode = auth_ctrl.get_current_session_id(EL_HOST)
+        if not self.keyCode:
+            raise RuntimeError(f"{EL_HOST} 세션 ID를 찾을 수 없어 암호화를 진행할 수 없습니다.")
+
         makeAutoNum_ret = self._makeAutoNumbers(auth_ctrl, win720_round)
         
         try:
@@ -115,6 +128,41 @@ class Win720:
     def _generate_req_headers(self, auth_ctrl: auth.AuthController) -> dict:
         assert isinstance(auth_ctrl, auth.AuthController)
         return auth_ctrl.add_auth_cred_to_headers(self._REQ_HEADERS)
+
+    def _page_headers(self, referer: str, same_origin: bool) -> dict:
+        headers = copy.deepcopy(self._REQ_HEADERS)
+        headers.pop("Content-Type", None)
+        headers.pop("X-Requested-With", None)
+        headers.pop("Origin", None)
+        headers.update({
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,"
+                      "image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
+            "Referer": referer,
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-User": "?1",
+            "Sec-Fetch-Site": "same-origin" if same_origin else "same-site",
+        })
+        return headers
+
+    def enter_game(self, auth_ctrl: auth.AuthController) -> None:
+        """브라우저와 같은 순서로 연금복권 게임 창에 진입한다.
+
+        el 서버는 이 진입 과정에서 JSESSIONID를 발급하고, 게임 서버의
+        encrypt.js가 그 값을 AES 키로 사용한다. 이 단계를 건너뛰면
+        makeAutoNo.do 응답을 복호화할 수 없다.
+        """
+        total_game_url = f"{EL_TOTAL_GAME_URL}?LottoId={WIN720_LOTTO_ID}"
+
+        self.http_client.get(
+            total_game_url,
+            headers=self._page_headers(common.MAIN_URL, same_origin=False),
+        )
+        self.http_client.get(
+            EL_GAME_URL,
+            headers=self._page_headers(total_game_url, same_origin=True),
+        )
     
     def _get_purchase_limit(self) -> int:
         raw_limit = os.environ.get(WIN720_LIMIT_ENV)
@@ -163,17 +211,27 @@ class Win720:
             "count": 0,
             "orders": [],
         }
+        # 원장 API는 주문 1건을 구매 게임(조) 수만큼 여러 행으로 돌려준다.
+        # 주문번호로 중복을 제거하지 않으면 게임 수가 배수로 부풀려져
+        # (5게임 구매가 25게임으로 계산) 이후 구매가 영구히 막힌다.
+        seen_order_nos = set()
         for item in data.get("list", []):
             item_round = self._normalize_round(item.get("ltEpsd") or item.get("ltEpsdView"))
             if item_round != str(win720_round):
                 continue
 
+            order_no = item.get("ntslOrdrNo") or "-"
+            if order_no != "-":
+                if order_no in seen_order_nos:
+                    continue
+                seen_order_nos.add(order_no)
+
             order = {
                 "round": item_round,
                 "purchased_date": item.get("eltOrdrDt", "-"),
-                "order_no": item.get("ntslOrdrNo", "-"),
+                "order_no": order_no,
             }
-            order["count"] = self._get_purchase_count_from_detail(auth_ctrl, order["order_no"])
+            order["count"] = self._get_purchase_count_from_detail(auth_ctrl, order_no)
             purchase["count"] += order["count"]
             purchase["orders"].append(order)
 
@@ -223,18 +281,11 @@ class Win720:
 
     def _get_round(self) -> str:
         try:
-            res = self.http_client.get(
-                "https://www.dhlottery.co.kr/common.do?method=main",
-                headers=self._REQ_HEADERS
-            )
-            html = res.text
-            soup = BS(html, "html5lib")
-            found = soup.find("strong", id="drwNo720")
-            if found:
-                return str(int(found.text) - 1)
-            else:
-                raise ValueError("drwNo720 not found")
-        except (requests.RequestException, AttributeError, ValueError):
+            last_drawn_round = common.get_last_drawn_rounds(self._REQ_HEADERS)["win720"]
+            if last_drawn_round is None:
+                raise ValueError("pt720 psltEpsd not found in selectMainInfo.do")
+            return str(last_drawn_round + 1)
+        except (requests.RequestException, AttributeError, ValueError, KeyError):
              base_date = datetime.datetime(2024, 12, 26)
              base_round = 244
              

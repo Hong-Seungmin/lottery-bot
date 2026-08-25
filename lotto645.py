@@ -128,7 +128,7 @@ class Lotto645:
         html_headers = self._REQ_HEADERS.copy()
         html_headers.pop("Origin", None)
         html_headers.pop("Content-Type", None)
-        html_headers["Referer"] = "https://www.dhlottery.co.kr/common.do?method=main"
+        html_headers["Referer"] = common.MAIN_URL
         
         if headers.get("Cookie"):
             html_headers["Cookie"] = headers.get("Cookie")
@@ -170,18 +170,10 @@ class Lotto645:
 
     def _get_round(self) -> str:
         try:
-            res = self.http_client.get(
-                "https://www.dhlottery.co.kr/common.do?method=main",
-                headers=self._REQ_HEADERS
-            )
-            html = res.text
-            soup = BS(html, "html5lib")
-            found = soup.find("strong", id="lottoDrwNo")
-            if found:
-                last_drawn_round = int(found.text)
-                return str(last_drawn_round + 1)
-            else:
-                 raise ValueError("lottoDrwNo not found")
+            last_drawn_round = common.get_last_drawn_rounds(self._REQ_HEADERS)["lotto645"]
+            if last_drawn_round is None:
+                raise ValueError("lt645 ltEpsd not found in selectMainInfo.do")
+            return str(last_drawn_round + 1)
         except Exception as e:
             base_date = datetime.datetime(2024, 12, 28)
             base_round = 1152
@@ -241,7 +233,7 @@ class Lotto645:
         parameters = common.get_search_date_range()
 
         try:
-            self.http_client.get("https://www.dhlottery.co.kr/common.do?method=main", headers=headers)
+            self.http_client.get(common.MAIN_URL, headers=headers)
         except requests.RequestException as e:
             print(f"[Warning] Warm-up request failed: {e}")
 

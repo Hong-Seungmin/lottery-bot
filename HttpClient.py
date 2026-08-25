@@ -7,11 +7,13 @@ class HttpClient:
     def __del__(self):
         self.session.close()
 
-    def post(self, url: str, headers: dict = None, data: dict = None) -> requests.Response:
+    def post(self, url: str, headers: dict = None, data: dict = None, json: dict = None) -> requests.Response:
         session_headers = self.session.headers.copy()
         if headers:
             session_headers.update(headers)
-        res = self.session.post(url, headers=session_headers, data=data, timeout=30, allow_redirects=True)
+        res = self.session.post(
+            url, headers=session_headers, data=data, json=json, timeout=30, allow_redirects=True
+        )
         res.raise_for_status()
         return res
 
