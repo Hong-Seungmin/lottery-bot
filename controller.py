@@ -45,6 +45,18 @@ def _setup_and_login():
 def buy_lotto645(authCtrl: auth.AuthController, cnt: int, mode: str):
     lotto = lotto645.Lotto645()
     _mode = lotto645.Lotto645Mode[mode.upper()]
+
+    # 로또 온라인 구매는 회차당 1인 5,000원 한도다. 매일 실행되는 워크플로가
+    # 이미 한도를 채운 회차에 또 요청하면 사이트가 거부하고, 그 거부가 매번
+    # 실패 알림으로 이어진다. 연금복권과 같은 방식으로 미리 건너뛴다.
+    current_round = lotto._get_round()
+    if lotto.is_already_purchased(authCtrl, current_round):
+        print(
+            f"[Info] 로또 6/45 {current_round}회차는 이미 구매했습니다. "
+            "회차당 구매 한도에 따라 추가 구매를 건너뜁니다."
+        )
+        return None
+
     response = lotto.buy_lotto645(authCtrl, cnt, _mode)
     response["balance"] = authCtrl.get_user_balance()
     return response
