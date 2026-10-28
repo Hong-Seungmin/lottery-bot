@@ -4,6 +4,10 @@ import re
 import requests
 
 
+class NotificationError(Exception):
+    """알림 전송이 실패했을 때 발생한다."""
+
+
 class Notification:
     def send_lotto_buying_message(self, body: dict, destination: dict) -> None:
         if not body:
@@ -205,6 +209,32 @@ class Notification:
         )
         self._send_message(destination, message)
 
+    def send_failure_message(self, description: str, error: str, destination: dict) -> None:
+        """구매/조회 단계가 예외로 실패했을 때 알린다.
+
+        기존에는 예외를 삼키고 로그만 남겨서, 봇이 몇 주째 아무것도 사지
+        못하고 있어도 사용자가 알 방법이 없었다."""
+        message = (
+            "🚨 <b>복권 봇 실행 실패</b>\n"
+            f"• 단계: <b>{self._escape(description)}</b>"
+            f"{self._code_block(error)}"
+            "\n조치가 필요한지 확인해 주세요."
+        )
+        self._send_message(destination, message)
+
+    def send_heartbeat_message(self, detail: str, destination: dict) -> None:
+        """봇이 살아 있음을 주기적으로 알린다.
+
+        예약 실행 자체가 멈추면 어떤 실패 알림도 발송될 수 없으므로,
+        '메시지가 오지 않는다'는 사실로 중단을 감지할 수 있게 한다."""
+        message = (
+            "💓 <b>복권 봇 정상 동작 중</b>\n"
+            f"{self._escape(detail)}\n"
+            "\n이 메시지가 한 주 이상 오지 않으면 GitHub Actions 예약 실행이 "
+            "멈춘 것이니 확인이 필요합니다."
+        )
+        self._send_message(destination, message)
+
     def _is_balance_shortage(self, body: dict) -> bool:
         text = self._flatten_message(body).lower()
         balance_shortage_patterns = [
@@ -253,7 +283,21 @@ class Notification:
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
-        requests.post(url, data=payload, timeout=30)
+        # 응답을 확인하지 않으면 토큰 폐기, 챗 차단, 잘못된 chat_id 같은 실패가
+        # 성공으로 취급되어 알림이 끊긴 사실 자체를 알 수 없게 된다.
+        res = requests.post(url, data=payload, timeout=30)
+
+        try:
+            body = res.json()
+            if body.get("ok"):
+                return
+            description = f"{body.get('error_code')} {body.get('description')}"
+        except ValueError:
+            description = res.text[:200]
+
+        raise NotificationError(
+            f"텔레그램 전송 실패 (HTTP {res.status_code}): {description}"
+        )
 
     def _code_block(self, value: str) -> str:
         return f"\n<pre>{self._escape(value)}</pre>" if value else ""

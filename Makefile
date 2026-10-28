@@ -20,3 +20,6 @@ check_win720:
 	python3 controller.py check_win720
 verify:
 	python3 verify_site.py
+
+heartbeat:
+	python3 controller.py heartbeat
