@@ -1,5 +1,6 @@
 import datetime
 import json
+import re
 import requests
 import time
 
@@ -221,6 +222,58 @@ class Lotto645:
         except UnicodeDecodeError:
              res.encoding = 'euc-kr' 
              return json.loads(res.text)
+
+    def is_already_purchased(self, auth_ctrl: auth.AuthController, round_no: str) -> bool:
+        """해당 회차를 이미 구매했는지 확인한다.
+
+        로또 온라인 구매는 회차당 1인 5,000원 한도라, 새 회차 첫날에
+        한도를 채우면 남은 기간의 구매 시도는 사이트가 거부한다. 매일
+        거부당하는 호출을 보내면 그때마다 실패로 처리되어 알림이
+        쏟아지므로, 연금복권과 같은 방식으로 미리 건너뛴다.
+
+        이력 조회에 실패하면 구매를 막지 않는다. 회차 한도는 사이트가
+        강제하므로 중복 결제 위험은 없고, 조회 실패로 정상 구매를
+        놓치는 쪽이 더 손해다.
+        """
+        assert isinstance(auth_ctrl, auth.AuthController)
+
+        headers = self._REQ_HEADERS.copy()
+        headers["Referer"] = "https://www.dhlottery.co.kr/mypage/mylotteryledger"
+        headers.pop("Content-Type", None)
+        headers.pop("Origin", None)
+        headers["X-Requested-With"] = "XMLHttpRequest"
+        headers["Accept"] = "application/json, text/javascript, */*; q=0.01"
+
+        parameters = common.get_search_date_range()
+        params = {
+            "srchStrDt": parameters["searchStartDate"],
+            "srchEndDt": parameters["searchEndDate"],
+            "ltGdsCd": "LO40",
+            "pageNum": 1,
+            "recordCountPerPage": 50,
+        }
+
+        try:
+            res = self.http_client.get(
+                "https://www.dhlottery.co.kr/mypage/selectMyLotteryledger.do",
+                params=params,
+                headers=headers,
+            )
+            rows = (res.json().get("data") or {}).get("list") or []
+        except (requests.RequestException, ValueError, AttributeError) as e:
+            logger.warning(
+                "[Warning] 로또 구매 이력 확인 실패. 구매를 그대로 시도합니다: %s", e
+            )
+            return False
+
+        target = str(round_no).strip()
+        for row in rows:
+            raw = row.get("ltEpsd") or row.get("ltEpsdView") or ""
+            matched = re.search(r"\d+", str(raw))
+            if matched and str(int(matched.group())) == target:
+                return True
+
+        return False
 
     def check_winning(self, auth_ctrl: auth.AuthController) -> dict:
         assert isinstance(auth_ctrl, auth.AuthController)
