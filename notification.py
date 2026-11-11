@@ -222,13 +222,20 @@ class Notification:
         )
         self._send_message(destination, message)
 
-    def send_heartbeat_message(self, detail: str, destination: dict) -> None:
-        """봇이 살아 있음을 주기적으로 알린다.
+    def send_heartbeat_message(self, detail: str, destination: dict, healthy: bool = True) -> None:
+        """봇 상태를 주기적으로 알린다.
 
         예약 실행 자체가 멈추면 어떤 실패 알림도 발송될 수 없으므로,
-        '메시지가 오지 않는다'는 사실로 중단을 감지할 수 있게 한다."""
+        '메시지가 오지 않는다'는 사실로 중단을 감지할 수 있게 한다.
+        구매가 누락된 상태라면 제목부터 그렇게 보여야 한다. 안 그러면
+        하트비트가 오히려 문제를 가린다."""
+        header = (
+            "💓 <b>복권 봇 정상 동작 중</b>"
+            if healthy
+            else "⚠️ <b>복권 봇 점검 필요</b>"
+        )
         message = (
-            "💓 <b>복권 봇 정상 동작 중</b>\n"
+            f"{header}\n"
             f"{self._escape(detail)}\n"
             "\n이 메시지가 한 주 이상 오지 않으면 GitHub Actions 예약 실행이 "
             "멈춘 것이니 확인이 필요합니다."
