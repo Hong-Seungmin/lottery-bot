@@ -10,10 +10,14 @@ jobs:
     name: Check Winning
     steps:
 
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      # ubuntu-latest 가 2026-10-19 부터 Ubuntu 26.04 로 이관되면서 이미지에
+      # Python 3.9(2025-10 지원 종료)가 더 이상 포함되지 않는다. 3.9 를 고정해
+      # 두면 setup-python 단계에서 바로 실패한다.
+      # checkout@v3 / setup-python@v4 는 Node.js 20 지원 종료 경고 대상이다.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.11'
           cache: 'pip' # caching pip dependencies
       - run: pip install -r requirements.txt
 

@@ -236,16 +236,56 @@ def win720_check():
     _send_balance_low_message_if_needed(response.get("balance"), destination)
 
 
+def _current_round_status(auth_ctrl: auth.AuthController):
+    """현재 판매 회차를 실제로 구매했는지 확인한다.
+
+    Returns: (사람이 읽을 문장 목록, 정상 여부)
+    """
+    lines = []
+    healthy = True
+
+    lotto = lotto645.Lotto645()
+    try:
+        round_no = lotto._get_round()
+        bought = lotto.is_already_purchased(auth_ctrl, round_no)
+        healthy = healthy and bought
+        lines.append(
+            f"• 로또 {round_no}회차: " + ("구매 완료" if bought else "⚠️ 미구매")
+        )
+    except Exception as e:
+        healthy = False
+        lines.append(f"• 로또 구매 상태 확인 실패: {type(e).__name__}: {e}")
+
+    pension = win720.Win720()
+    try:
+        round_no = pension._get_round()
+        count = pension._get_current_round_purchase(auth_ctrl, round_no)["count"]
+        healthy = healthy and bool(count)
+        lines.append(
+            f"• 연금복권 {round_no}회차: "
+            + (f"{count}게임 구매 완료" if count else "⚠️ 미구매")
+        )
+    except Exception as e:
+        healthy = False
+        lines.append(f"• 연금복권 구매 상태 확인 실패: {type(e).__name__}: {e}")
+
+    return lines, healthy
+
+
 def heartbeat():
     """봇이 살아 있는지 확인하고 알린다.
 
-    로그인과 알림 경로를 함께 점검하므로, 이 메시지가 끊기면 예약 실행이
-    멈췄거나 계정/토큰에 문제가 생겼다는 신호가 된다. 구매는 하지 않는다."""
+    로그인·알림 경로뿐 아니라 현재 회차를 실제로 구매했는지까지 확인한다.
+    로그인만 확인하면 구매가 며칠째 실패하는 중에도 "정상 동작 중" 이라고
+    보고하게 되어, 하트비트가 오히려 문제를 가려버린다. 구매는 하지 않는다."""
     auth_ctrl, _, destination = _setup_and_login()
+
     balance = auth_ctrl.get_user_balance()
+    status_lines, healthy = _current_round_status(auth_ctrl)
+    lines = [f"• 현재 잔액: {balance}"] + status_lines
 
     notification.Notification().send_heartbeat_message(
-        f"• 로그인 정상\n• 현재 잔액: {balance}", destination
+        "\n".join(lines), destination, healthy=healthy
     )
     _send_balance_low_message_if_needed(balance, destination)
 
